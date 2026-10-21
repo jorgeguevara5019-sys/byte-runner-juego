@@ -1,0 +1,487 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Byte Runner · Laberinto de Datos</title>
+<meta name="description" content="Juego de laberinto generado con IA: recolecta bits y esquiva los virus.">
+<style>
+  :root { --bg:#070b14; --panel:#0f1626; --text:#e6edf3; --muted:#8b949e; --wall:#2f6bff; --accent:#00e5a8; }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  html, body { height:100%; }
+  body {
+    background: radial-gradient(ellipse at top, #13203d 0%, var(--bg) 65%);
+    color:var(--text);
+    font-family:"Segoe UI", system-ui, -apple-system, Roboto, Arial, sans-serif;
+    display:flex; flex-direction:column; align-items:center;
+    padding:16px; touch-action:none; user-select:none;
+  }
+  h1 { font-size:clamp(1.4rem,4vw,2rem); letter-spacing:.02em; }
+  h1 span { color:var(--accent); }
+  .sub { color:var(--muted); font-size:.9rem; margin:4px 0 12px; text-align:center; }
+  .hud {
+    width:100%; max-width:532px; display:flex; justify-content:space-between;
+    background:var(--panel); border:1px solid #1f2b44; border-radius:10px;
+    padding:8px 14px; font-weight:700; font-size:.95rem; margin-bottom:8px;
+  }
+  .hud small { color:var(--muted); font-weight:500; margin-right:4px; }
+  .wrap { position:relative; width:100%; max-width:532px; }
+  canvas { width:100%; height:auto; display:block; background:#000; border-radius:10px; border:1px solid #1f2b44; }
+  .overlay {
+    position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center;
+    background:rgba(4,8,16,.82); border-radius:10px; text-align:center; padding:20px; gap:10px;
+  }
+  .overlay.hidden { display:none; }
+  .overlay h2 { font-size:1.6rem; color:var(--accent); }
+  .overlay p { color:#c9d4e0; font-size:.95rem; max-width:360px; }
+  .btn {
+    background:var(--accent); color:#03231a; border:0; border-radius:999px; padding:10px 26px;
+    font:inherit; font-weight:800; font-size:1rem; cursor:pointer; margin-top:6px;
+  }
+  .legend { display:flex; gap:14px; flex-wrap:wrap; justify-content:center; font-size:.85rem; color:#c9d4e0; }
+  .legend i { display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:5px; vertical-align:middle; }
+  .pad { display:none; margin-top:12px; gap:8px; grid-template-columns:repeat(3,64px); grid-template-rows:repeat(2,52px); }
+  .pad button {
+    background:var(--panel); border:1px solid #1f2b44; color:var(--text); border-radius:10px; font-size:1.4rem;
+  }
+  .pad .up { grid-column:2; } .pad .left { grid-column:1; grid-row:2; } .pad .down { grid-column:2; grid-row:2; } .pad .right { grid-column:3; grid-row:2; }
+  @media (pointer:coarse) { .pad { display:grid; } }
+  footer { color:var(--muted); font-size:.8rem; margin-top:14px; text-align:center; }
+</style>
+</head>
+<body>
+  <h1>Byte <span>Runner</span></h1>
+  <p class="sub">Recolecta todos los bits del laberinto y esquiva los virus. Usa las flechas o WASD (en celular: desliza o usa los botones).</p>
+
+  <div class="hud">
+    <div><small>Puntos</small><span id="score">0</span></div>
+    <div><small>Nivel</small><span id="level">1</span></div>
+    <div><small>Vidas</small><span id="lives">3</span></div>
+    <div><small>Récord</small><span id="best">0</span></div>
+  </div>
+
+  <div class="wrap">
+    <canvas id="game" width="532" height="588"></canvas>
+    <div class="overlay" id="overlay">
+      <h2 id="ovTitle">Byte Runner</h2>
+      <p id="ovText">Eres un pequeño robot de datos. Come los <b>bits</b> (puntos), toma un <b>escudo antivirus</b> para poder eliminar a los virus por unos segundos y no dejes que te atrapen.</p>
+      <div class="legend">
+        <span><i style="background:#00e5a8"></i>Tú</span>
+        <span><i style="background:#ffd166"></i>Bit · 10</span>
+        <span><i style="background:#7cf6ff"></i>Escudo · 50</span>
+        <span><i style="background:#ff4d6d"></i>Virus</span>
+      </div>
+      <button class="btn" id="startBtn">Jugar</button>
+    </div>
+  </div>
+
+  <div class="pad" id="pad">
+    <button class="up" data-d="up">▲</button>
+    <button class="left" data-d="left">◀</button>
+    <button class="down" data-d="down">▼</button>
+    <button class="right" data-d="right">▶</button>
+  </div>
+
+  <footer>Actividad de Clase 3 · Juego generado con IAG · Jorge Guevara · Ingeniería en Negocios, CU Tlaquepaque (UdeG)</footer>
+
+<script>
+// ---------- Mapa ----------
+// # muro, . bit, o escudo, - puerta de la base, ' ' vacío, P jugador, G virus
+const MAP = [
+  "###################",
+  "#........#........#",
+  "#o##.###.#.###.##o#",
+  "#.................#",
+  "#.##.#.#####.#.##.#",
+  "#....#...#...#....#",
+  "####.### # ###.####",
+  "   #.#   G   #.#   ",
+  "####.# ##-## #.####",
+  "    .  #GGG#  .    ",
+  "####.# ##### #.####",
+  "   #.#       #.#   ",
+  "####.# ##### #.####",
+  "#........#........#",
+  "#.##.###.#.###.##.#",
+  "#o.#.....P.....#.o#",
+  "##.#.#.#####.#.#.##",
+  "#....#...#...#....#",
+  "#.######.#.######.#",
+  "#.................#",
+  "###################"
+];
+const COLS = MAP[0].length, ROWS = MAP.length, T = 28;
+const cv = document.getElementById("game"), ctx = cv.getContext("2d");
+cv.width = COLS * T; cv.height = ROWS * T;
+
+const DIRS = { up:{x:0,y:-1}, down:{x:0,y:1}, left:{x:-1,y:0}, right:{x:1,y:0} };
+const OPP = { up:"down", down:"up", left:"right", right:"left" };
+const VIRUS_COLORS = ["#ff4d6d", "#ff9f1c", "#c77dff", "#4cc9f0"];
+
+let grid, dots, player, viruses, score = 0, lives = 3, level = 1, best = 0;
+let state = "menu", frightTimer = 0, eatChain = 0, readyTimer = 0, last = 0, mouth = 0;
+
+try { best = +localStorage.getItem("byteRunnerBest") || 0; } catch (e) {}
+document.getElementById("best").textContent = best;
+
+function isWall(c, r) {
+  if (r < 0 || r >= ROWS) return true;
+  c = (c + COLS) % COLS; // túnel lateral
+  const ch = grid[r][c];
+  return ch === "#" || ch === "-";
+}
+function wallFor(ent, c, r) {
+  if (r < 0 || r >= ROWS) return true;
+  c = (c + COLS) % COLS;
+  const ch = grid[r][c];
+  if (ch === "#") return true;
+  if (ch === "-") return !ent.canDoor;
+  return false;
+}
+
+function buildLevel(keepDots) {
+  grid = MAP.map(row => row.split(""));
+  if (!keepDots) {
+    dots = 0;
+    grid.forEach(row => row.forEach(ch => { if (ch === "." || ch === "o") dots++; }));
+  }
+}
+
+function resetActors() {
+  viruses = [];
+  let vi = 0;
+  MAP.forEach((row, r) => [...row].forEach((ch, c) => {
+    if (ch === "P") player = { c, r, x:c, y:r, dir:"left", next:"left", speed:5.2 };
+    if (ch === "G") {
+      viruses.push({
+        c, r, x:c, y:r, dir:"up", home:{c, r}, color:VIRUS_COLORS[vi % 4], idx:vi,
+        speed: 3.6 + level * 0.35, canDoor:true, state:"house", release: vi * 2.5, eaten:false
+      });
+      vi++;
+    }
+  }));
+  frightTimer = 0;
+  readyTimer = 1.6;
+}
+
+function newGame() {
+  score = 0; lives = 3; level = 1;
+  buildLevel(false); resetActors(); updateHud();
+  state = "play"; hideOverlay();
+}
+
+function nextLevel() {
+  level++;
+  buildLevel(false); resetActors(); updateHud();
+}
+
+function updateHud() {
+  document.getElementById("score").textContent = score;
+  document.getElementById("lives").textContent = lives;
+  document.getElementById("level").textContent = level;
+  if (score > best) {
+    best = score;
+    try { localStorage.setItem("byteRunnerBest", best); } catch (e) {}
+  }
+  document.getElementById("best").textContent = best;
+}
+
+// ---------- Movimiento en rejilla ----------
+function centered(e) { return Math.abs(e.x - Math.round(e.x)) < 0.001 && Math.abs(e.y - Math.round(e.y)) < 0.001; }
+
+function stepEntity(e, dt, chooseDir) {
+  let dist = e.speed * dt;
+  while (dist > 0) {
+    if (centered(e)) {
+      e.x = Math.round(e.x); e.y = Math.round(e.y);
+      // túnel
+      if (e.x < 0) e.x = COLS - 1; if (e.x >= COLS) e.x = 0;
+      e.c = e.x; e.r = e.y;
+      chooseDir(e);
+      const d = DIRS[e.dir];
+      if (!d || wallFor(e, e.c + d.x, e.r + d.y)) return;
+    }
+    const d = DIRS[e.dir];
+    // distancia hasta el siguiente centro
+    const tx = d.x ? (d.x > 0 ? Math.floor(e.x + 1) : Math.ceil(e.x - 1)) : e.x;
+    const ty = d.y ? (d.y > 0 ? Math.floor(e.y + 1) : Math.ceil(e.y - 1)) : e.y;
+    const remain = Math.abs(tx - e.x) + Math.abs(ty - e.y);
+    const mv = Math.min(dist, remain);
+    e.x += d.x * mv; e.y += d.y * mv;
+    if (mv === remain) { e.x = tx; e.y = ty; }
+    dist -= mv;
+    if (e.x < -0.5) e.x += COLS; if (e.x > COLS - 0.5) e.x -= COLS;
+  }
+}
+
+function playerChoose(p) {
+  const n = DIRS[p.next];
+  if (n && !isWall(p.c + n.x, p.r + n.y)) p.dir = p.next;
+  // comer
+  const ch = grid[p.r][(p.c + COLS) % COLS];
+  if (ch === ".") { grid[p.r][p.c] = " "; score += 10; dots--; updateHud(); }
+  if (ch === "o") {
+    grid[p.r][p.c] = " "; score += 50; dots--; updateHud();
+    frightTimer = Math.max(3, 8 - level * 0.6); eatChain = 0;
+    viruses.forEach(v => { if (v.state === "chase") { v.state = "fright"; v.dir = OPP[v.dir]; } });
+  }
+  if (dots <= 0) { state = "levelup"; showOverlay("¡Nivel completado!", `Recolectaste todos los bits. Puntos: ${score}`, "Siguiente nivel"); }
+}
+
+function virusTarget(v) {
+  const p = player;
+  if (v.state === "eyes") return v.home;
+  if (v.idx === 0) return { c:p.c, r:p.r };                                   // persigue directo
+  if (v.idx === 1) { const d = DIRS[p.dir]; return { c:p.c + d.x * 4, r:p.r + d.y * 4 }; } // se adelanta
+  if (v.idx === 2) { const a = viruses[0]; return { c:2 * p.c - a.c, r:2 * p.r - a.r }; } // flanquea
+  const dd = Math.hypot(v.c - p.c, v.r - p.r);                                 // tímido
+  return dd > 7 ? { c:p.c, r:p.r } : { c:0, r:ROWS - 1 };
+}
+
+function virusChoose(v) {
+  // salir de la base
+  if (v.state === "house") return;
+  if (v.state === "leaving") {
+    if (v.r <= 7) { v.state = frightTimer > 0 ? "fright" : "chase"; v.canDoor = false; }
+    else { v.dir = v.c < 9 ? "right" : v.c > 9 ? "left" : "up"; return; }
+  }
+  if (v.state === "eyes" && v.c === v.home.c && v.r === v.home.r) {
+    v.state = "leaving"; v.canDoor = true; v.dir = "up"; return;
+  }
+  const options = Object.keys(DIRS).filter(k => k !== OPP[v.dir] && !wallFor(v, v.c + DIRS[k].x, v.r + DIRS[k].y));
+  if (!options.length) { v.dir = OPP[v.dir]; return; }
+  if (v.state === "fright") { v.dir = options[Math.floor(Math.random() * options.length)]; return; }
+  const t = virusTarget(v);
+  options.sort((a, b) => {
+    const da = Math.hypot(v.c + DIRS[a].x - t.c, v.r + DIRS[a].y - t.r);
+    const db = Math.hypot(v.c + DIRS[b].x - t.c, v.r + DIRS[b].y - t.r);
+    return da - db;
+  });
+  v.dir = options[0];
+}
+
+function update(dt) {
+  if (state !== "play") return;
+  if (readyTimer > 0) { readyTimer -= dt; return; }
+  mouth += dt * 10;
+
+  stepEntity(player, dt, playerChoose);
+
+  if (frightTimer > 0) {
+    frightTimer -= dt;
+    if (frightTimer <= 0) viruses.forEach(v => { if (v.state === "fright") v.state = "chase"; });
+  }
+
+  viruses.forEach(v => {
+    if (v.state === "house") {
+      v.release -= dt;
+      v.y = v.home.r + Math.sin(performance.now() / 200 + v.idx) * 0.15;
+      if (v.release <= 0) { v.y = v.home.r; v.state = "leaving"; v.canDoor = true; }
+      return;
+    }
+    const base = 3.6 + level * 0.35;
+    v.speed = v.state === "fright" ? base * 0.55 : v.state === "eyes" ? 9 : base;
+    if (v.state === "eyes") {
+      v.canDoor = true; v.eyesT = (v.eyesT || 0) + dt;
+      if (v.eyesT > 6) { v.x = v.c = v.home.c; v.y = v.r = v.home.r; v.eyesT = 0; v.state = "leaving"; v.dir = "up"; return; }
+    } else v.eyesT = 0;
+    stepEntity(v, dt, virusChoose);
+  });
+
+  // colisiones
+  for (const v of viruses) {
+    if (v.state === "house" || v.state === "eyes") continue;
+    let dx = Math.abs(v.x - player.x); dx = Math.min(dx, COLS - dx);
+    if (dx + Math.abs(v.y - player.y) < 0.7) {
+      if (v.state === "fright") {
+        eatChain++; score += 200 * Math.pow(2, eatChain - 1); updateHud();
+        v.state = "eyes"; v.canDoor = true;
+      } else {
+        lives--; updateHud();
+        if (lives <= 0) {
+          state = "over";
+          showOverlay("Fin del juego", `Un virus te alcanzó. Puntuación final: ${score}`, "Jugar de nuevo");
+        } else {
+          buildLevel(true); keepEatenDots(); resetActors();
+        }
+        return;
+      }
+    }
+  }
+}
+
+// Al perder una vida conservamos los bits ya comidos
+let eatenSnapshot = null;
+function keepEatenDots() {
+  if (!eatenSnapshot) return;
+  grid = eatenSnapshot.map(r => r.slice());
+}
+
+// ---------- Dibujo ----------
+function draw() {
+  ctx.fillStyle = "#000"; ctx.fillRect(0, 0, cv.width, cv.height);
+
+  // muros
+  for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
+    const ch = grid[r][c], x = c * T, y = r * T;
+    if (ch === "#") {
+      ctx.fillStyle = "#0b1a44";
+      ctx.fillRect(x, y, T, T);
+      ctx.strokeStyle = "#2f6bff"; ctx.lineWidth = 2;
+      const n = (cc, rr) => rr >= 0 && rr < ROWS && cc >= 0 && cc < COLS && grid[rr][cc] === "#";
+      ctx.beginPath();
+      if (!n(c, r - 1)) { ctx.moveTo(x + 2, y + 2); ctx.lineTo(x + T - 2, y + 2); }
+      if (!n(c, r + 1)) { ctx.moveTo(x + 2, y + T - 2); ctx.lineTo(x + T - 2, y + T - 2); }
+      if (!n(c - 1, r)) { ctx.moveTo(x + 2, y + 2); ctx.lineTo(x + 2, y + T - 2); }
+      if (!n(c + 1, r)) { ctx.moveTo(x + T - 2, y + 2); ctx.lineTo(x + T - 2, y + T - 2); }
+      ctx.stroke();
+    } else if (ch === "-") {
+      ctx.fillStyle = "#7cf6ff"; ctx.fillRect(x, y + T / 2 - 2, T, 4);
+    } else if (ch === ".") {
+      ctx.fillStyle = "#ffd166";
+      ctx.fillRect(x + T / 2 - 3, y + T / 2 - 3, 6, 6); // bit cuadrado
+    } else if (ch === "o") {
+      const pulse = 7 + Math.sin(performance.now() / 180) * 2;
+      ctx.save(); ctx.translate(x + T / 2, y + T / 2);
+      ctx.shadowColor = "#7cf6ff"; ctx.shadowBlur = 12;
+      ctx.fillStyle = "#7cf6ff";
+      ctx.beginPath(); // escudo
+      ctx.moveTo(0, -pulse); ctx.lineTo(pulse * .85, -pulse * .5); ctx.lineTo(pulse * .7, pulse * .4);
+      ctx.lineTo(0, pulse); ctx.lineTo(-pulse * .7, pulse * .4); ctx.lineTo(-pulse * .85, -pulse * .5); ctx.closePath();
+      ctx.fill(); ctx.restore();
+    }
+  }
+
+  drawPlayer();
+  viruses.forEach(drawVirus);
+
+  if (state === "play" && readyTimer > 0) {
+    ctx.fillStyle = "#00e5a8"; ctx.font = "bold 22px Segoe UI, sans-serif"; ctx.textAlign = "center";
+    ctx.fillText("¡LISTO!", cv.width / 2, 11 * T + T * 0.75);
+  }
+}
+
+function drawPlayer() {
+  const p = player, cx = p.x * T + T / 2, cy = p.y * T + T / 2, s = T * 0.42;
+  ctx.save(); ctx.translate(cx, cy);
+  const rot = { right:0, down:Math.PI / 2, left:Math.PI, up:-Math.PI / 2 }[p.dir];
+  ctx.rotate(rot);
+  // cuerpo de robot (cuadrado redondeado)
+  ctx.shadowColor = "#00e5a8"; ctx.shadowBlur = 10;
+  ctx.fillStyle = "#00e5a8";
+  roundRect(-s, -s, s * 2, s * 2, 6); ctx.fill();
+  ctx.shadowBlur = 0;
+  // visor
+  ctx.fillStyle = "#03231a";
+  roundRect(-s * 0.1, -s * 0.55, s * 0.95, s * 0.6, 3); ctx.fill();
+  // ojo que parpadea al avanzar
+  const blink = (Math.sin(mouth) + 1) / 2;
+  ctx.fillStyle = "#eaffff";
+  ctx.fillRect(s * 0.35, -s * 0.4, s * 0.3, s * 0.3 * (0.3 + blink * 0.7));
+  // antena
+  ctx.strokeStyle = "#00e5a8"; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(-s * 0.4, -s); ctx.lineTo(-s * 0.6, -s * 1.35); ctx.stroke();
+  ctx.fillStyle = "#ffd166"; ctx.beginPath(); ctx.arc(-s * 0.6, -s * 1.35, 2.5, 0, Math.PI * 2); ctx.fill();
+  ctx.restore();
+}
+
+function drawVirus(v) {
+  const cx = v.x * T + T / 2, cy = v.y * T + T / 2, s = T * 0.36;
+  const t = performance.now() / 300;
+  if (v.state === "eyes") {
+    ctx.fillStyle = "#fff";
+    ctx.beginPath(); ctx.arc(cx - 4, cy, 3, 0, Math.PI * 2); ctx.arc(cx + 4, cy, 3, 0, Math.PI * 2); ctx.fill();
+    return;
+  }
+  let color = v.color;
+  if (v.state === "fright") color = (frightTimer < 2 && Math.floor(frightTimer * 6) % 2) ? "#ffffff" : "#3a56ff";
+  ctx.save(); ctx.translate(cx, cy); ctx.rotate(t * (v.idx % 2 ? 1 : -1) * 0.6);
+  // picos del virus
+  ctx.strokeStyle = color; ctx.lineWidth = 2.5;
+  for (let i = 0; i < 8; i++) {
+    const a = (i / 8) * Math.PI * 2;
+    ctx.beginPath();
+    ctx.moveTo(Math.cos(a) * s * 0.8, Math.sin(a) * s * 0.8);
+    ctx.lineTo(Math.cos(a) * s * 1.3, Math.sin(a) * s * 1.3);
+    ctx.stroke();
+    ctx.fillStyle = color;
+    ctx.beginPath(); ctx.arc(Math.cos(a) * s * 1.35, Math.sin(a) * s * 1.35, 2.2, 0, Math.PI * 2); ctx.fill();
+  }
+  ctx.fillStyle = color;
+  ctx.beginPath(); ctx.arc(0, 0, s, 0, Math.PI * 2); ctx.fill();
+  ctx.restore();
+  // cara
+  ctx.fillStyle = "#000";
+  if (v.state === "fright") {
+    ctx.fillRect(cx - 5, cy - 3, 3, 3); ctx.fillRect(cx + 2, cy - 3, 3, 3);
+    ctx.fillRect(cx - 5, cy + 4, 10, 2);
+  } else {
+    const d = DIRS[v.dir] || { x:0, y:0 };
+    ctx.fillStyle = "#fff";
+    ctx.beginPath(); ctx.arc(cx - 4, cy - 1, 3.2, 0, Math.PI * 2); ctx.arc(cx + 4, cy - 1, 3.2, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = "#000";
+    ctx.beginPath(); ctx.arc(cx - 4 + d.x * 1.5, cy - 1 + d.y * 1.5, 1.6, 0, Math.PI * 2);
+    ctx.arc(cx + 4 + d.x * 1.5, cy - 1 + d.y * 1.5, 1.6, 0, Math.PI * 2); ctx.fill();
+  }
+}
+
+function roundRect(x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath();
+}
+
+// ---------- Bucle ----------
+function loop(ts) {
+  const dt = Math.min(0.05, (ts - last) / 1000 || 0); last = ts;
+  if (state === "play") eatenSnapshot = grid.map(r => r.slice());
+  update(dt);
+  draw();
+  requestAnimationFrame(loop);
+}
+
+// ---------- Overlay ----------
+const ov = document.getElementById("overlay");
+function showOverlay(title, text, btn) {
+  document.getElementById("ovTitle").textContent = title;
+  document.getElementById("ovText").textContent = text;
+  document.getElementById("startBtn").textContent = btn;
+  ov.classList.remove("hidden");
+}
+function hideOverlay() { ov.classList.add("hidden"); }
+document.getElementById("startBtn").addEventListener("click", () => {
+  if (state === "levelup") { nextLevel(); state = "play"; hideOverlay(); }
+  else if (state === "paused") { state = "play"; hideOverlay(); }
+  else newGame();
+});
+
+// ---------- Controles ----------
+const KEYS = { ArrowUp:"up", ArrowDown:"down", ArrowLeft:"left", ArrowRight:"right", w:"up", s:"down", a:"left", d:"right", W:"up", S:"down", A:"left", D:"right" };
+document.addEventListener("keydown", e => {
+  if (KEYS[e.key]) { e.preventDefault(); if (player) player.next = KEYS[e.key]; }
+  if ((e.key === "p" || e.key === "P" || e.key === "Escape") && (state === "play" || state === "paused")) {
+    if (state === "play") { state = "paused"; showOverlay("Pausa", "Presiona continuar o la tecla P.", "Continuar"); }
+    else { state = "play"; hideOverlay(); }
+  }
+  if (e.key === "Enter" && !ov.classList.contains("hidden")) document.getElementById("startBtn").click();
+});
+document.getElementById("pad").addEventListener("pointerdown", e => {
+  const b = e.target.closest("button"); if (b && player) player.next = b.dataset.d;
+});
+let touchStart = null;
+cv.addEventListener("touchstart", e => { const t = e.touches[0]; touchStart = { x:t.clientX, y:t.clientY }; }, { passive:true });
+cv.addEventListener("touchmove", e => {
+  if (!touchStart || !player) return;
+  const t = e.touches[0], dx = t.clientX - touchStart.x, dy = t.clientY - touchStart.y;
+  if (Math.max(Math.abs(dx), Math.abs(dy)) > 24) {
+    player.next = Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? "right" : "left") : (dy > 0 ? "down" : "up");
+    touchStart = { x:t.clientX, y:t.clientY };
+  }
+}, { passive:true });
+
+// inicio
+buildLevel(false); resetActors();
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
